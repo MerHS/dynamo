@@ -83,9 +83,16 @@ You can then use the default routing methods exposed by the client class to send
 - **Round-robin routing**: Cycles through available workers via `client.round_robin()`
 - **Direct routing**: Explicitly targets a specific worker via `client.direct(input, component_id)`
 - **Least-loaded routing**: Routes to the worker with fewest active connections via `--router-mode least-loaded`
+- **Least-prefill-loaded routing**: Routes to the worker holding the fewest active prefill tokens via `--router-mode least-prefill-loaded`
 - **Device-aware weighted routing**: Routes using CPU/non-CPU ratio budgeting plus least-loaded selection within the selected device group via `--router-mode device-aware-weighted`
 
-In disaggregated prefill paths it skips bootstrap optimization and uses the synchronous prefill path, matching power-of-two routing.
+In disaggregated prefill paths these occupancy-based modes skip bootstrap optimization and use the synchronous prefill path, matching power-of-two routing.
+
+## Least-Prefill-Loaded Routing
+
+`least-prefill-loaded` is a token-weighted variant of `least-loaded`. Instead of counting each in-flight request as `1`, it weighs each request by its input token length (ISL) -- including multimodal placeholder tokens -- and routes the next request to the worker with the smallest summed ISL across its unfinished requests. A request contributes its ISL from the moment it is routed until its response stream ends (completion or client disconnect). This balances prefill-bound and multimodal workloads more evenly than request-count balancing, since a worker holding one very long prompt is correctly treated as more loaded than one holding several short prompts.
+
+Unlike `--router-mode kv`, it consults no KV cache index, so it needs no KV events and works in both aggregated and disaggregated serving. It requires no additional flags.
 
 KV cache routing uses direct routing with a special worker selection algorithm.
 

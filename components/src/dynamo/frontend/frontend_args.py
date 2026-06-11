@@ -255,10 +255,13 @@ class FrontendArgGroup(ArgGroup):
             default="round-robin",
             help="How to route the request. power-of-two picks 2 random workers and "
             "routes to the one with fewer in-flight requests. least-loaded routes to "
-            "the worker with the fewest active requests. device-aware-weighted routes "
-            "based on worker device type (CPU/CUDA). In disaggregated prefill mode, "
-            "both power-of-two and least-loaded skip bootstrap optimization and fall "
-            "back to the synchronous prefill path.",
+            "the worker with the fewest active requests. least-prefill-loaded routes to "
+            "the worker holding the fewest active prefill tokens (sum of input token "
+            "lengths, including multimodal tokens, across its in-flight requests). "
+            "device-aware-weighted routes based on worker device type (CPU/CUDA). In "
+            "disaggregated prefill mode, power-of-two, least-loaded, and "
+            "least-prefill-loaded skip bootstrap optimization and fall back to the "
+            "synchronous prefill path.",
             choices=[
                 "round-robin",
                 "random",
@@ -266,6 +269,7 @@ class FrontendArgGroup(ArgGroup):
                 "kv",
                 "direct",
                 "least-loaded",
+                "least-prefill-loaded",
                 "device-aware-weighted",
             ],
         )

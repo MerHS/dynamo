@@ -62,14 +62,22 @@ fn response_inactivity_timeout() -> Option<std::time::Duration> {
 struct OccupancyPermit {
     state: Arc<RoutingOccupancyState>,
     instance_id: u64,
+    /// Load contributed to the worker by this request. `1` for request-count modes;
+    /// the request's input token length for token-weighted (least-prefill-loaded) mode.
+    weight: u64,
     armed: bool,
 }
 
 impl OccupancyPermit {
     fn new(state: Arc<RoutingOccupancyState>, instance_id: u64) -> Self {
+        Self::with_weight(state, instance_id, 1)
+    }
+
+    fn with_weight(state: Arc<RoutingOccupancyState>, instance_id: u64, weight: u64) -> Self {
         Self {
             state,
             instance_id,
+            weight,
             armed: true,
         }
     }
@@ -82,6 +90,7 @@ impl OccupancyPermit {
                 inner: stream,
                 state: self.state.clone(),
                 instance_id: self.instance_id,
+                weight: self.weight,
             }),
             engine_ctx,
         )
@@ -95,7 +104,7 @@ impl OccupancyPermit {
 impl Drop for OccupancyPermit {
     fn drop(&mut self) {
         if self.armed {
-            self.state.decrement(self.instance_id);
+            self.state.sub(self.instance_id, self.weight);
         }
     }
 }
@@ -162,6 +171,10 @@ pub enum RouterMode {
     KV,
     Direct,
     LeastLoaded,
+    /// Route to the worker holding the least total input-token load (sum of input
+    /// token lengths, including multimodal tokens, across its in-flight requests).
+    /// A token-weighted variant of `LeastLoaded`.
+    LeastPrefillLoaded,
     /// Device-aware weighted routing for heterogeneous workers.
     DeviceAwareWeighted,
 }
@@ -291,6 +304,7 @@ where
             router_mode,
             RouterMode::PowerOfTwoChoices
                 | RouterMode::LeastLoaded
+                | RouterMode::LeastPrefillLoaded
                 | RouterMode::DeviceAwareWeighted
         ) {
             Some(get_or_create_routing_occupancy_state(&client.endpoint).await)
@@ -332,6 +346,7 @@ where
             router_mode,
             RouterMode::PowerOfTwoChoices
                 | RouterMode::LeastLoaded
+                | RouterMode::LeastPrefillLoaded
                 | RouterMode::DeviceAwareWeighted
         ) {
             Some(get_or_create_routing_occupancy_state(&client.endpoint).await)
@@ -351,6 +366,11 @@ where
         };
 
         Ok(router)
+    }
+
+    /// The routing mode this router was configured with.
+    pub fn router_mode(&self) -> RouterMode {
+        self.router_mode
     }
 
     /// Issue a request to the next available instance in a round-robin fashion
@@ -562,6 +582,49 @@ where
         }
     }
 
+    /// Issue a request to the worker holding the least total input-token load.
+    ///
+    /// Token-weighted variant of [`Self::least_loaded`]: instead of counting each
+    /// in-flight request as `1`, this adds `weight` (the request's input token length,
+    /// including multimodal tokens) to the selected worker's load and removes it when
+    /// the response stream ends. `weight` is computed one layer up (in `dynamo-llm`),
+    /// where the concrete request type and its token sequence are known.
+    pub async fn least_prefill_loaded(
+        &self,
+        request: SingleIn<T>,
+        weight: u64,
+    ) -> anyhow::Result<ManyOut<U>> {
+        let state = self.occupancy_state()?;
+        let instance_ids = self
+            .client
+            .instance_ids_avail()
+            .iter()
+            .copied()
+            .collect::<Vec<_>>();
+        let instance_id = state
+            .select_exact_min_and_add(&instance_ids, weight)
+            .await
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "no instances found for endpoint {}",
+                    self.client.endpoint.id()
+                )
+            })?;
+        let permit = OccupancyPermit::with_weight(state.clone(), instance_id, weight);
+        tracing::trace!(
+            "least prefill loaded router selected {instance_id} (prefill tokens: {}, added: {weight})",
+            state.load(instance_id)
+        );
+
+        match self
+            .generate_with_fault_detection(instance_id, request)
+            .await
+        {
+            Ok(stream) => Ok(permit.into_tracked_stream(stream)),
+            Err(err) => Err(err),
+        }
+    }
+
     /// Select the next worker according to the routing mode.
     /// Increments round-robin counter if applicable.
     /// Returns None for modes that require request lifecycle tracking or explicit routing hints.
@@ -584,6 +647,7 @@ where
             RouterMode::PowerOfTwoChoices
             | RouterMode::Direct
             | RouterMode::LeastLoaded
+            | RouterMode::LeastPrefillLoaded
             | RouterMode::DeviceAwareWeighted => None,
             RouterMode::KV => {
                 panic!(
@@ -619,6 +683,7 @@ where
             RouterMode::PowerOfTwoChoices
             | RouterMode::Direct
             | RouterMode::LeastLoaded
+            | RouterMode::LeastPrefillLoaded
             | RouterMode::DeviceAwareWeighted => None,
             RouterMode::KV => {
                 panic!(
@@ -871,6 +936,12 @@ where
                 );
             }
             RouterMode::LeastLoaded => self.least_loaded(request).await,
+            RouterMode::LeastPrefillLoaded => {
+                anyhow::bail!(
+                    "LeastPrefillLoaded routing should not call generate on PushRouter directly; \
+                     use the PrefillLoadPushRouter wrapper which computes the per-request token weight"
+                );
+            }
             RouterMode::DeviceAwareWeighted => self.device_aware_weighted(request).await,
         }
     }
@@ -880,11 +951,12 @@ struct OccupancyTrackedStream<U: Data> {
     inner: ManyOut<U>,
     state: Arc<RoutingOccupancyState>,
     instance_id: u64,
+    weight: u64,
 }
 
 impl<U: Data> Drop for OccupancyTrackedStream<U> {
     fn drop(&mut self) {
-        self.state.decrement(self.instance_id);
+        self.state.sub(self.instance_id, self.weight);
     }
 }
 

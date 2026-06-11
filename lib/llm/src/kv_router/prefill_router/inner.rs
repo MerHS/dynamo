@@ -6,7 +6,7 @@ use std::sync::Arc;
 use anyhow::Result;
 
 use dynamo_runtime::{
-    pipeline::{AsyncEngine, ManyOut, PushRouter, SingleIn},
+    pipeline::{AsyncEngine, ManyOut, PushRouter, RouterMode, SingleIn},
     protocols::annotated::Annotated,
 };
 
@@ -40,6 +40,16 @@ impl InnerPrefillRouter {
             (InnerPrefillRouter::KvRouter(router), _) => router.generate(request).await,
             (InnerPrefillRouter::SimpleRouter(router), Some(worker_id)) => {
                 router.direct(request, worker_id).await
+            }
+            // LeastPrefillLoaded bails in generate() (it needs the per-request token
+            // weight, which the generic router cannot compute), so route the synchronous
+            // prefill request via the weighted entry point here, where the request type
+            // is concrete. Mirrors how least-loaded degrades to its generate() path.
+            (InnerPrefillRouter::SimpleRouter(router), None)
+                if router.router_mode() == RouterMode::LeastPrefillLoaded =>
+            {
+                let weight = request.block_mm_routing_info().0.len() as u64;
+                router.least_prefill_loaded(request, weight).await
             }
             (InnerPrefillRouter::SimpleRouter(router), None) => router.generate(request).await,
         }

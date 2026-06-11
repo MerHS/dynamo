@@ -10,7 +10,7 @@ import time
 from abc import ABC, abstractmethod
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import Any, AsyncIterator, Dict, Final, Generic, Optional, TypeVar
+from typing import Any, AsyncIterator, Dict, Final, Generic, List, Optional, TypeVar
 
 import torch
 from vllm.config import ModelConfig, VllmConfig
@@ -1311,6 +1311,49 @@ class BaseWorkerHandler(ABC, Generic[RequestT, ResponseT]):
                 mm_processor_kwargs = req_extra_args.get("mm_processor_kwargs")
         return mm_processor_kwargs
 
+    async def _should_route_to_encoder(self, image_urls: List[str]) -> bool:
+        """Size-gated routing policy for --route-to-encoder.
+
+        Returns True (offload the request's images to the encode worker) when
+        the threshold is disabled (0) or when ANY image's longer side exceeds
+        ``route_to_encoder_min_long_side`` px; otherwise False so the images are
+        decoded + encoded locally in this engine.
+
+        The decision is per-request, not per-image: vLLM can't mix pre-computed
+        image_embeds and raw images for the same modality within one request, so
+        a request routes entirely to the encoder if any of its images is large.
+        Probing uses ``image_loader.load_image`` (cached for http(s) URLs, so the
+        local-decode path below reuses the decode for small images).
+        """
+        threshold = getattr(self.config, "route_to_encoder_min_long_side", 0) or 0
+        if threshold <= 0:
+            return True  # legacy: always route to the encode worker
+        for url in image_urls:
+            try:
+                image = await self.image_loader.load_image(url)
+                long_side = max(image.size)  # PIL .size == (width, height)
+            except Exception as e:
+                logger.warning(
+                    "route-to-encoder size probe failed for %s (%s); "
+                    "routing to encoder",
+                    url[:80],
+                    e,
+                )
+                return True
+            if long_side > threshold:
+                logger.debug(
+                    "image long side %d > %d px -> route to encoder",
+                    long_side,
+                    threshold,
+                )
+                return True
+        logger.debug(
+            "all %d image(s) <= %d px long side -> encode locally",
+            len(image_urls),
+            threshold,
+        )
+        return False
+
     async def _extract_multimodal_data(
         self,
         request: Dict[str, Any],
@@ -1348,7 +1391,16 @@ class BaseWorkerHandler(ABC, Generic[RequestT, ResponseT]):
                     image_urls.append(item["Url"])
                 elif isinstance(item, dict) and "Decoded" in item:
                     supported = False
-            if supported:
+            # Size-gated routing: only offload to the encode worker(s) when the
+            # request has an image large enough to be worth the round-trip + NIXL
+            # transfer. Smaller images fall through to the local-decode branch
+            # below (which requires the encoder to be loaded in this engine, i.e.
+            # NOT --enable-mm-embeds). Threshold 0 = always route (legacy).
+            if (
+                supported
+                and image_urls
+                and await self._should_route_to_encoder(image_urls)
+            ):
                 vllm_mm_data = await self.embedding_loader.load_multimodal_embeddings(
                     image_urls, request_id, model=self.config.model, context=context
                 )

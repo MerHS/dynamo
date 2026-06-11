@@ -52,6 +52,9 @@ pub enum RouterMode {
     /// Used when an external orchestrator (e.g., EPP) handles worker selection.
     Direct,
     LeastLoaded,
+    /// Route to the worker holding the least total input-token load (sum of input
+    /// token lengths, including multimodal tokens, across in-flight requests).
+    LeastPrefillLoaded,
     DeviceAwareWeighted,
 }
 
@@ -64,6 +67,7 @@ impl From<RouterMode> for RsRouterMode {
             RouterMode::KV => Self::KV,
             RouterMode::Direct => Self::Direct,
             RouterMode::LeastLoaded => Self::LeastLoaded,
+            RouterMode::LeastPrefillLoaded => Self::LeastPrefillLoaded,
             RouterMode::DeviceAwareWeighted => Self::DeviceAwareWeighted,
         }
     }

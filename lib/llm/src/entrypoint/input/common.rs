@@ -11,7 +11,8 @@ use crate::{
     entrypoint::{EngineConfig, RouterConfig},
     http::service::metrics::Metrics,
     kv_router::{
-        DirectRoutingRouter, KvPushRouter, KvRouter, PrefillRouter, metrics::RouterRequestMetrics,
+        DirectRoutingRouter, KvPushRouter, KvRouter, PrefillLoadPushRouter, PrefillRouter,
+        metrics::RouterRequestMetrics,
     },
     migration::Migration,
     model_card::ModelDeploymentCard,
@@ -348,6 +349,9 @@ where
         | RouterMode::PowerOfTwoChoices
         | RouterMode::LeastLoaded
         | RouterMode::DeviceAwareWeighted => ServiceBackend::from_engine(Arc::new(router)),
+        RouterMode::LeastPrefillLoaded => {
+            ServiceBackend::from_engine(Arc::new(PrefillLoadPushRouter::new(router)))
+        }
         RouterMode::KV => {
             let Some(chooser) = chooser else {
                 anyhow::bail!("RouterMode::KV requires KVRouter to not be null");

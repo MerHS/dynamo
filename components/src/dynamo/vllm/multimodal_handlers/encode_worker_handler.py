@@ -324,15 +324,15 @@ class EncodeWorkerHandler:
                         (transfer_request[1], embedding_item.embeddings)
                     )
 
-            logger.debug(f"Request: {request.model_dump_json()}")
+            logger.debug("Request: %s", request.model_dump_json())
 
             time_end = time.perf_counter()
             self._accumulated_time += time_end - time_start
             self._processed_requests += 1
-            logger.debug(
+            logger.info(
                 f"received request {{ id: {request_id} }} at time {time_start:.4f}, processed in {time_end - time_start:.4f} seconds, break down: image loading and encoding time {(before_transfer_time - time_start):.4f} seconds, transfer preparation time {(after_transfer_time - before_transfer_time):.4f} seconds, after transfer time {(time_end - after_transfer_time):.4f} seconds."
             )
-            logger.debug(
+            logger.info(
                 f"Encoded image(s) for request {{ id: {request_id} }} in {time_end - time_start:.4f} seconds. "
                 f"Average encoding time: {self._accumulated_time / self._processed_requests:.4f} seconds over {self._processed_requests} requests."
             )

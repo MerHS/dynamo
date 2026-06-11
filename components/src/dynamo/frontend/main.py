@@ -233,6 +233,9 @@ async def async_main():
     elif config.router_mode == "least-loaded":
         router_mode = RouterMode.LeastLoaded
         kv_router_config = None
+    elif config.router_mode == "least-prefill-loaded":
+        router_mode = RouterMode.LeastPrefillLoaded
+        kv_router_config = None
     elif config.router_mode == "device-aware-weighted":
         router_mode = RouterMode.DeviceAwareWeighted
         kv_router_config = None

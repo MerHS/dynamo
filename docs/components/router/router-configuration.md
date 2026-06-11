@@ -20,6 +20,8 @@ This page collects the main router flags for frontend-embedded and standalone de
 `lcfs` orders by adjusted reverse arrival time (`priority_jump + arrival_offset`) and mainly serves controlled comparison experiments.
 `wspt` orders by `(1 + priority_jump) / isl_tokens` and optimizes average TTFT.
 
+For `--router-mode least-prefill-loaded`, the router balances by summed input token length (ISL, including multimodal tokens) of each worker's in-flight requests rather than by request count. It needs no additional flags and works in both aggregated and disaggregated serving. See [Routing Concepts](router-concepts.md#least-prefill-loaded-routing).
+
 For `--router-mode device-aware-weighted`, set `DYN_ENCODER_CUDA_TO_CPU_RATIO` to the approximate throughput ratio of one non-CPU worker relative to one CPU worker. The default is `8`.
 
 ## KV Event Transport and Persistence

@@ -71,6 +71,22 @@ class DynamoVllmArgGroup(ArgGroup):
             default=False,
             help="Enable routing to separate encoder workers for multimodal processing.",
         )
+        add_argument(
+            g,
+            flag_name="--route-to-encoder-min-long-side",
+            env_var="DYN_VLLM_ROUTE_TO_ENCODER_MIN_LONG_SIDE",
+            default=0,
+            arg_type=int,
+            help=(
+                "Size gate for --route-to-encoder. Only offload an image to the "
+                "encode worker(s) when its longer side (px) exceeds this value; "
+                "smaller images are decoded + encoded locally in this engine "
+                "(requires the encoder to be loaded, i.e. NOT --enable-mm-embeds). "
+                "0 (default) routes every image to the encoder. For multi-image "
+                "requests the whole request routes to the encoder if any image "
+                "exceeds the threshold (vLLM can't mix embeds and raw images)."
+            ),
+        )
         add_negatable_bool_argument(
             g,
             flag_name="--multimodal-encode-worker",
@@ -257,6 +273,9 @@ class DynamoVllmConfig(ConfigBase):
 
     # Multimodal
     route_to_encoder: bool
+    # Size gate for route_to_encoder: only offload images whose longer side (px)
+    # exceeds this; 0 = always route (legacy). See --route-to-encoder-min-long-side.
+    route_to_encoder_min_long_side: int = 0
     multimodal_encode_worker: bool
     multimodal_worker: bool
     multimodal_decode_worker: bool

@@ -761,6 +761,42 @@ impl AsyncEngine<SingleIn<PreprocessedRequest>, ManyOut<Annotated<LLMEngineOutpu
     }
 }
 
+/// A token-weighted least-loaded wrapper for `RouterMode::LeastPrefillLoaded`.
+///
+/// Routes each request to the worker holding the least total input-token load,
+/// where a request contributes its input token length (including multimodal tokens)
+/// from the moment it is routed until its response stream ends. This is the seam
+/// where the concrete request type is known, so we can compute the per-request token
+/// weight; the generic `PushRouter` cannot. Unlike KV routing, no cache index is
+/// consulted — this is a pure load balancer that works in both aggregated and
+/// disaggregated serving.
+pub struct PrefillLoadPushRouter {
+    inner: PushRouter<PreprocessedRequest, Annotated<LLMEngineOutput>>,
+}
+
+impl PrefillLoadPushRouter {
+    pub fn new(inner: PushRouter<PreprocessedRequest, Annotated<LLMEngineOutput>>) -> Self {
+        PrefillLoadPushRouter { inner }
+    }
+}
+
+#[async_trait]
+impl AsyncEngine<SingleIn<PreprocessedRequest>, ManyOut<Annotated<LLMEngineOutput>>, Error>
+    for PrefillLoadPushRouter
+{
+    async fn generate(
+        &self,
+        request: SingleIn<PreprocessedRequest>,
+    ) -> Result<ManyOut<Annotated<LLMEngineOutput>>, Error> {
+        // Input token length, including multimodal placeholder tokens: prefer the
+        // multimodal routing token sequence and fall back to the primary token_ids
+        // when no multimodal routing info is present.
+        let weight = request.block_mm_routing_info().0.len() as u64;
+
+        self.inner.least_prefill_loaded(request, weight).await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::pinned_worker_hint;

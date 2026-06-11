@@ -34,26 +34,48 @@ pub(crate) struct RoutingOccupancyState {
 }
 
 impl RoutingOccupancyState {
-    pub(crate) fn increment(&self, instance_id: u64) {
+    /// Add `weight` to a worker's load. `weight` is `1` for request-count modes
+    /// (power-of-two, least-loaded, device-aware) and the request's input token
+    /// length for token-weighted modes (least-prefill-loaded).
+    pub(crate) fn add(&self, instance_id: u64, weight: u64) {
         self.counts
             .entry(instance_id)
             .or_insert_with(|| AtomicU64::new(0))
-            .fetch_add(1, Ordering::Relaxed);
+            .fetch_add(weight, Ordering::Relaxed);
+    }
+
+    pub(crate) fn increment(&self, instance_id: u64) {
+        self.add(instance_id, 1);
     }
 
     pub(crate) async fn select_exact_min_and_increment(&self, instance_ids: &[u64]) -> Option<u64> {
+        self.select_exact_min_and_add(instance_ids, 1).await
+    }
+
+    /// Atomically select the least-loaded worker and add `weight` to its load.
+    /// The lock makes selection-then-update race-free across concurrent routers.
+    pub(crate) async fn select_exact_min_and_add(
+        &self,
+        instance_ids: &[u64],
+        weight: u64,
+    ) -> Option<u64> {
         let _guard = self.exact_selection_lock.lock().await;
         let id = *instance_ids.iter().min_by_key(|&&id| self.load(id))?;
-        self.increment(id);
+        self.add(id, weight);
         Some(id)
     }
 
-    pub(crate) fn decrement(&self, instance_id: u64) {
+    /// Subtract `weight` from a worker's load (saturating at 0).
+    pub(crate) fn sub(&self, instance_id: u64, weight: u64) {
         if let Some(count) = self.counts.get(&instance_id) {
             let _ = count.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
-                Some(current.saturating_sub(1))
+                Some(current.saturating_sub(weight))
             });
         }
+    }
+
+    pub(crate) fn decrement(&self, instance_id: u64) {
+        self.sub(instance_id, 1);
     }
 
     pub(crate) fn load(&self, instance_id: u64) -> u64 {
@@ -505,6 +527,29 @@ mod tests {
         assert_eq!(state.load(100), 30);
         assert_eq!(state.load(200), 30);
         assert_eq!(state.load(300), 30);
+    }
+
+    /// Token-weighted selection (least-prefill-loaded): selection minimizes summed
+    /// weight, and a worker carrying a large request is avoided until peers catch up.
+    #[tokio::test]
+    async fn test_select_exact_min_and_add_weighted() {
+        let state = RoutingOccupancyState::default();
+
+        // Worker 1 receives a heavy (1000-token) request first.
+        let first = state.select_exact_min_and_add(&[1, 2, 3], 1000).await.unwrap();
+        assert_eq!(state.load(first), 1000);
+
+        // The next two light (10-token) requests must avoid the heavy worker,
+        // landing on the two zero-load peers rather than the loaded one.
+        let second = state.select_exact_min_and_add(&[1, 2, 3], 10).await.unwrap();
+        let third = state.select_exact_min_and_add(&[1, 2, 3], 10).await.unwrap();
+        assert_ne!(second, first);
+        assert_ne!(third, first);
+        assert_ne!(second, third);
+
+        // Releasing the heavy request restores its worker to zero load.
+        state.sub(first, 1000);
+        assert_eq!(state.load(first), 0);
     }
 
     #[tokio::test]
