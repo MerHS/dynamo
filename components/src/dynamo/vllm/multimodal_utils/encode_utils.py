@@ -127,6 +127,9 @@ def encode_image_embeddings(
             embeddings = embeddings[0]
         embeddings = embeddings.unsqueeze(0) if embeddings.ndim == 2 else embeddings
 
+        if vision_encoder.device.type == "cuda":
+            torch.cuda.synchronize(device=vision_encoder.device)
+
     return embeddings
 
 

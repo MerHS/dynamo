@@ -41,6 +41,7 @@ pub mod agent_controller;
 pub mod indexer;
 pub mod metrics;
 pub mod prefill_router;
+pub mod prefill_weight;
 pub mod publisher;
 pub mod push_router;
 pub mod scheduler;

@@ -11,7 +11,7 @@ use dynamo_runtime::{
 };
 
 use crate::{
-    kv_router::KvPushRouter,
+    kv_router::{KvPushRouter, prefill_weight::prefill_token_weight},
     protocols::common::llm_backend::{LLMEngineOutput, PreprocessedRequest},
 };
 
@@ -48,7 +48,7 @@ impl InnerPrefillRouter {
             (InnerPrefillRouter::SimpleRouter(router), None)
                 if router.router_mode() == RouterMode::LeastPrefillLoaded =>
             {
-                let weight = request.block_mm_routing_info().0.len() as u64;
+                let weight = prefill_token_weight(&request);
                 router.least_prefill_loaded(request, weight).await
             }
             (InnerPrefillRouter::SimpleRouter(router), None) => router.generate(request).await,

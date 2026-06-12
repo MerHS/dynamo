@@ -22,6 +22,7 @@ use crate::{
         KvRouter,
         agent_controller::{AgentController, SessionCloseAction},
         metrics::RouterRequestMetrics,
+        prefill_weight::prefill_token_weight,
         sticky_sessions::{InMemoryAffinityStore, StickySessionRouter},
     },
     preprocessor::PreprocessedRequest,
@@ -788,10 +789,11 @@ impl AsyncEngine<SingleIn<PreprocessedRequest>, ManyOut<Annotated<LLMEngineOutpu
         &self,
         request: SingleIn<PreprocessedRequest>,
     ) -> Result<ManyOut<Annotated<LLMEngineOutput>>, Error> {
-        // Input token length, including multimodal placeholder tokens: prefer the
-        // multimodal routing token sequence and fall back to the primary token_ids
-        // when no multimodal routing info is present.
-        let weight = request.block_mm_routing_info().0.len() as u64;
+        // Input token length, including multimodal tokens: the text token_ids
+        // length plus a pixel-derived estimate of the expanded image tokens (the
+        // frontend forwards images undecoded, so token_ids holds only the single
+        // unexpanded placeholder per image). See `prefill_weight`.
+        let weight = prefill_token_weight(&request);
 
         self.inner.least_prefill_loaded(request, weight).await
     }

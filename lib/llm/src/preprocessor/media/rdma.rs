@@ -51,6 +51,18 @@ pub struct RdmaMediaDataDescriptor {
     pub(crate) source_storage: Option<Arc<nixl::NixlRegistered<SystemStorage>>>,
 }
 
+impl RdmaMediaDataDescriptor {
+    /// `(height, width)` of a decoded image tensor, whose shape is stored as
+    /// `[height, width, channels]` (see the image decoder). Returns `None` for
+    /// tensors that are not at least 2-dimensional (e.g. audio).
+    pub fn image_height_width(&self) -> Option<(usize, usize)> {
+        match self.tensor_info.shape.as_slice() {
+            [height, width, ..] => Some((*height, *width)),
+            _ => None,
+        }
+    }
+}
+
 impl DecodedMediaData {
     pub fn into_rdma_descriptor(self, nixl_agent: &NixlAgent) -> Result<RdmaMediaDataDescriptor> {
         let source_storage = self.data;
